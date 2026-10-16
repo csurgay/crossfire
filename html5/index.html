@@ -1,0 +1,1068 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Crossfire</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: one CRT monitor centered on a dark desk; the canvas is the whole game, the caption is a key card underneath. */
+:root {
+  --desk: #121311;
+  --bezel: #2a2b27;
+  --bezel-edge: #3b3c36;
+  --screen: #000000;
+  --ink: #c9c6b8;
+  --dim: #7d7b70;
+  --cga-yellow: #ffff55;
+  --cga-green: #55ff55;
+  --mono: "IBM Plex Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+  color-scheme: dark;
+}
+html, body { height: 100%; }
+body {
+  background: var(--desk);
+  color: var(--ink);
+  font-family: var(--mono);
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 18px;
+  padding-block: 20px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  box-sizing: border-box;
+}
+.monitor {
+  background: var(--bezel);
+  border: 1px solid var(--bezel-edge);
+  border-radius: 18px;
+  padding: clamp(10px, 2.4vw, 26px);
+  box-shadow: 0 30px 60px -20px rgba(0,0,0,.8), inset 0 1px 0 rgba(255,255,255,.06);
+  max-width: 100%;
+  box-sizing: border-box;
+}
+.screen {
+  position: relative;
+  width: min(calc(100vw - 32px - 2 * clamp(10px, 2.4vw, 26px)), calc((100vh - 170px) * 4 / 3), 960px);
+  aspect-ratio: 4 / 3;
+  max-width: 100%;
+  background: var(--screen);
+  border-radius: 6px;
+  overflow: hidden;
+  cursor: text;
+}
+canvas {
+  display: block; width: 100%; height: 100%;
+  image-rendering: pixelated; image-rendering: crisp-edges;
+}
+.scan {
+  position: absolute; inset: 0; pointer-events: none;
+  background: repeating-linear-gradient(to bottom, rgba(0,0,0,0) 0, rgba(0,0,0,0) 2px, rgba(0,0,0,.10) 3px);
+  mix-blend-mode: multiply;
+}
+.focus {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  background: rgba(0,0,0,.55); color: var(--cga-yellow); font-size: 14px; letter-spacing: .08em;
+  text-transform: uppercase;
+}
+#kbd { position: absolute; left: -9999px; top: 0; width: 1px; height: 1px; opacity: 0; }
+.keys {
+  display: flex; flex-wrap: wrap; justify-content: center; gap: 6px 18px;
+  font-size: 12px; color: var(--dim); max-width: 960px; text-align: center;
+}
+.keys b { color: var(--ink); font-weight: 600; }
+.keys .hl b { color: var(--cga-green); }
+</style>
+</head>
+<body>
+
+<div class="monitor">
+  <div class="screen" id="screen">
+    <canvas id="cv" width="640" height="200" aria-label="Crossfire game screen"></canvas>
+    <div class="scan"></div>
+    <!--div class="focus" id="focus" hidden>click to focus</div-->
+    <div class="focus" id="focus" hidden></div>
+    <input id="kbd" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="keyboard input">
+  </div>
+</div>
+<div class="keys">
+  <span class="hl"><b>cross 'name'</b> to start</span>
+  <span class="hl"><b>cross robot</b> for demo</span>
+  <span><b>i j k l</b> move</span>
+  <span><b>e s d f</b> fire</span>
+  <span><b>space</b> stop</span>
+  <!--span><b>enter</b> robot mode</span>
+  <span><b>0–9 + -</b> speed</span>
+  <span><b>ctrl+s</b> sound</span>
+  <span><b>esc</b> quit</span-->
+</div>
+
+<script>
+'use strict';
+/* =====================================================================
+   CROSSFIRE (C) 1995 Peter Csurgay — HTML5 canvas port of cross.pas
+   CGA 320x200, palette C0, BGI default 8x8 font, PC speaker.
+   The game logic below follows cross.pas statement by statement.
+   ===================================================================== */
+
+// ---------- embedded files ----------
+const PATTERNS_CRO = "empty\n0\n################<>################\n##                              ##\n##                              ##\n##                              ##\n##                              ##\n##                              ##\n##                              ##\n##                              ##\n<>                              <>\n##                              ##\n##                              ##\n##                              ##\n##                              ##\n##                              ##\n##                              ##\n##                              ##\n################<>################\n\nship\n3\n################<>################\n##                              ##\n##                              ##\n##                              ##\n##              ##              ##\n##            ##  ##            ##\n##    ##      ##  ##      ##    ##\n##  ##  ##    ##  ##    ##  ##  ##\n##  ##  ######  ##  ######  ##  <>\n##  ##  ##    ##  ##    ##  ##  ##\n##    ##      ##  ##      ##    ##\n##            ##  ##            ##\n##              ##              ##\n##                              ##\n##                              ##\n##                              ##\n################<>################\n\nbonus\n3\n################<>################\n##                              ##\n##                              ##\n##                              ##\n##              ##              ##\n##              ##              ##\n##          ##  ##  ##          ##\n##      ##  ##  ##  ##  ##      ##\n<>          ##########          <>\n##      ##  ##  ##  ##  ##      ##\n##          ##  ##  ##          ##\n##              ##              ##\n##              ##              ##\n##                              ##\n##                              ##\n##                              ##\n################<>################\n\nexplosion1\n3\n################<>################\n##                              ##\n##                              ##\n##                              ##\n##                    ##  ##    ##\n##        ##      ##  ##        ##\n##    ##  ##  ##  ##            ##\n##  ####  ##  ##  ##            ##\n<>          ####  ##  ##  ##    <>\n##        ##  ##  ##  ##  ####  ##\n##        ##  ##      ##        ##\n##    ##  ##                    ##\n##    ##  ##                    ##\n##    ##                        ##\n##                              ##\n##                              ##\n################<>################\n\nexplosion2\n3\n################<>################\n##                              ##\n##                              ##\n##                              ##\n##    ##  ##                    ##\n##        ##  ##      ##        ##\n##            ##  ##  ##  ##    ##\n##            ##  ##  ##  ####  ##\n<>    ##  ##  ##  ####          <>\n##  ####  ##  ##  ##            ##\n##        ##      ##  ##        ##\n##                    ##  ##    ##\n##                    ##  ##    ##\n##                        ##    ##\n##                              ##\n##                              ##\n################<>################\n\nenemy1\n1\n################<>################\n##                              ##\n##                              ##\n##                              ##\n##              ##              ##\n##          ##  ##  ##          ##\n##        ##  ##  ##  ##        ##\n##      ##              ##      ##\n<>  ##  ##  ####  ####  ##  ##  <>\n##      ##              ##      ##\n##        ##  ##  ##  ##        ##\n##          ##  ##  ##          ##\n##              ##              ##\n##                              ##\n##                              ##\n##                              ##\n################<>################\n\nenemy2\n1\n################<>################\n##                              ##\n##      ##              ##      ##\n##  ##                      ##  ##\n##  ##                      ##  ##\n##  ##          ##          ##  ##\n##    ##      ##  ##      ##    ##\n##        ##  ##  ##            ##\n<>            ##  ##  ##        <>\n##    ##  ####  ##  ####  ##    ##\n##  ##                      ##  ##\n##            ##  ##            ##\n##  ##          ##          ##  ##\n##    ##                  ##    ##\n##                              ##\n##                              ##\n################<>################\n\nenemy3\n1\n################<>################\n##                              ##\n##    ####              ####    ##\n##      ####  ##  ##  ####      ##\n##        ##  ##  ##  ##        ##\n##    ##  ##  ##  ##  ##  ##    ##\n##    ##        ##        ##    ##\n##  ##    ####      ####    ##  ##\n<>    ##        ##        ##    <>\n##    ##  ##  ##  ##  ##  ##    ##\n##        ##  ##  ##  ##        ##\n##          ##      ##          ##\n##          ##      ##          ##\n##      ##  ##      ##  ##      ##\n##      ##  ##      ##  ##      ##\n##                              ##\n################<>################\n\nenemy4\n2\n################<>################\n##                              ##\n##              ##              ##\n##            ##  ##            ##\n##      ##      ##      ##      ##\n##        ##    ##    ##        ##\n##        ####  ##  ####        ##\n##      ##    ##  ##    ##      ##\n<>  ####        ##        ####  <>\n##      ##    ##  ##    ##      ##\n##        ####  ##  ####        ##\n##        ##  ##  ##  ##        ##\n##      ##  ##      ##  ##      ##\n##            ##  ##            ##\n##              ##              ##\n##                              ##\n################<>################\n\nammo\n3\n################<>################\n##                              ##\n##            ######            ##\n##                              ##\n##                              ##\n##                              ##\n##                              ##\n##                              ##\n<>  ######              ######  <>\n##                              ##\n##                              ##\n##                              ##\n##                              ##\n##                              ##\n##            ######            ##\n##                              ##\n################<>################\n";
+const HISTORY_SEED = "9.1. 9:28\tpeti:40 (aborted)\n9.1. 12:45\tpeti:0 (aborted)\n5.4. 21:11\tpeti:23610\n5.4. 21:13\tpeti:3780 (aborted)\n5.22. 12:8\tpeti:31340\n6.14. 0:8\teva:1520 (cheated) (aborted)\n6.15. 15:47\tpeti:5190\n6.15. 16:2\tpeti:37550 (cheated)\n6.15. 16:4\trobot:28070\n9.9. 20:28\tpeti:72160\n9.24. 17:4\tpetya:59550 (cheated)\n9.24. 17:6\trobot:2000 (cheated) (aborted)\n9.27. 21:10\tpetya:9020 (cheated)\n9.27. 21:10\tevi:0\n9.27. 21:11\tevi:200\n9.27. 21:13\tevi:890\n9.27. 21:13\tevibaba:0 (aborted)\n9.27. 21:15\trobot:23880 (cheated)\n9.27. 21:16\trobot:28060\n9.27. 21:17\trobot:29710\n11.22. 13:15\tpetya:6080 (aborted)\n6.4. 15:22\tpetyka:100\n6.4. 15:22\tpetyka:270\n6.4. 15:22\tpetyka:260\n1.30. 15:24\tppp:0\n1.30. 15:25\tppp:60\n1.30. 15:25\tppp:40\n1.30. 15:25\tppp:40\n1.30. 15:25\tppp:80\n1.30. 15:26\tppp:10730 (cheated)\n1.30. 15:30\tppp:22800 (cheated)\n1.30. 15:31\trobot:26800\n1.30. 15:32\trobot:23720\n12.7. 14:52\tp2014:26020\n12.7. 22:2\tpetyka:15740 (cheated)\n12.7. 22:57\tpetyka:29610 (cheated)\n12.9. 14:26\tpetya:13240 (cheated) (aborted)\n12.12. 23:5\tpety:23040\n2.1. 18:9\tpetya:20540\n2.1. 43:5\tpac:0 (aborted)\n2.1. 43:41\tpac:60 (aborted)\n2.1. 43:46\tpac:5510\n2.1. 57:9\tpac:24060 (cheated)\n2.1. 57:11\trobot:20 (cheated)\n2.1. 106:31\tpetya:110 (aborted)\n2.1. 137:42\tpetya:3040 (aborted)\n2.1. 137:48\tpetya:3040 (aborted)\n2.1. 137:50\tpetya:0 (aborted)\n2.1. 139:0\trobot:26970 (cheated)\n2.1. 158:59\tgalaxy:22230 (cheated)\n2.1. 184:35\trobot:110 (cheated) (aborted)\n2.1. 190:27\tpetya:5000\n2.1. 207:6\tpetya:19130 (cheated)\n2.1. 227:33\tpetya:440 (aborted)\n2.1. 227:43\tpetya:12160 (aborted)\n3.25. 20:3\tpetya:18010 (cheated) (aborted)\n4.3. 19:49\tpetya:3610\n";
+const README_TXT = "Crossfire, (C) 1995, Peter Csurgay\n\nThis game is a public mukiware. You can use, copy, \nand distribute it with the following restrictions:\n1. All the core files are being kept together\n(readme.txt, cross.exe, cga.bgi, patterns.cro),\n2. No fee can be applied for copies and distribution.\n\nCrossfire is an implementation of the old classic\nshhot'em up game from the early days of the \ncomputer history. Different versions existed on\nR10, TRS80, ABC80 and C64.\nThis version comes with a robot being able to manage\nagainst the aliens.\nThe sound can be toggled by Ctrl-S.\n\nInformation about other mukiwares available and \ncomments are welcome at <csurgay@idt.unit.no>\n\nSincerely yours, Peter       Trondheim, 31.March 1995\n";
+
+// ---------- IBM/BGI 8x8 font (MSB = leftmost pixel) ----------
+const FONT_HEX = "00 00 00 00 00 00 00 00\n30 78 78 30 30 00 30 00\n6C 6C 6C 00 00 00 00 00\n6C 6C FE 6C FE 6C 6C 00\n30 7C C0 78 0C F8 30 00\n00 C6 CC 18 30 66 C6 00\n38 6C 38 76 DC CC 76 00\n60 60 C0 00 00 00 00 00\n18 30 60 60 60 30 18 00\n60 30 18 18 18 30 60 00\n00 66 3C FF 3C 66 00 00\n00 30 30 FC 30 30 00 00\n00 00 00 00 00 30 30 60\n00 00 00 FC 00 00 00 00\n00 00 00 00 00 30 30 00\n06 0C 18 30 60 C0 80 00\n7C C6 CE DE F6 E6 7C 00\n30 70 30 30 30 30 FC 00\n78 CC 0C 38 60 CC FC 00\n78 CC 0C 38 0C CC 78 00\n1C 3C 6C CC FE 0C 1E 00\nFC C0 F8 0C 0C CC 78 00\n38 60 C0 F8 CC CC 78 00\nFC CC 0C 18 30 30 30 00\n78 CC CC 78 CC CC 78 00\n78 CC CC 7C 0C 18 70 00\n00 30 30 00 00 30 30 00\n00 30 30 00 00 30 30 60\n18 30 60 C0 60 30 18 00\n00 00 FC 00 00 FC 00 00\n60 30 18 0C 18 30 60 00\n78 CC 0C 18 30 00 30 00\n7C C6 DE DE DE C0 78 00\n30 78 CC CC FC CC CC 00\nFC 66 66 7C 66 66 FC 00\n3C 66 C0 C0 C0 66 3C 00\nF8 6C 66 66 66 6C F8 00\nFE 62 68 78 68 62 FE 00\nFE 62 68 78 68 60 F0 00\n3C 66 C0 C0 CE 66 3E 00\nCC CC CC FC CC CC CC 00\n78 30 30 30 30 30 78 00\n1E 0C 0C 0C CC CC 78 00\nE6 66 6C 78 6C 66 E6 00\nF0 60 60 60 62 66 FE 00\nC6 EE FE FE D6 C6 C6 00\nC6 E6 F6 DE CE C6 C6 00\n38 6C C6 C6 C6 6C 38 00\nFC 66 66 7C 60 60 F0 00\n78 CC CC CC DC 78 1C 00\nFC 66 66 7C 6C 66 E6 00\n78 CC E0 70 1C CC 78 00\nFC B4 30 30 30 30 78 00\nCC CC CC CC CC CC FC 00\nCC CC CC CC CC 78 30 00\nC6 C6 C6 D6 FE EE C6 00\nC6 C6 6C 38 38 6C C6 00\nCC CC CC 78 30 30 78 00\nFE C6 8C 18 32 66 FE 00\n78 60 60 60 60 60 78 00\nC0 60 30 18 0C 06 02 00\n78 18 18 18 18 18 78 00\n10 38 6C C6 00 00 00 00\n00 00 00 00 00 00 00 FF\n30 30 18 00 00 00 00 00\n00 00 78 0C 7C CC 76 00\nE0 60 60 7C 66 66 DC 00\n00 00 78 CC C0 CC 78 00\n1C 0C 0C 7C CC CC 76 00\n00 00 78 CC FC C0 78 00\n38 6C 60 F0 60 60 F0 00\n00 00 76 CC CC 7C 0C F8\nE0 60 6C 76 66 66 E6 00\n30 00 70 30 30 30 78 00\n0C 00 0C 0C 0C CC CC 78\nE0 60 66 6C 78 6C E6 00\n70 30 30 30 30 30 78 00\n00 00 CC FE FE D6 C6 00\n00 00 F8 CC CC CC CC 00\n00 00 78 CC CC CC 78 00\n00 00 DC 66 66 7C 60 F0\n00 00 76 CC CC 7C 0C 1E\n00 00 DC 76 66 60 F0 00\n00 00 7C C0 78 0C F8 00\n10 30 7C 30 30 34 18 00\n00 00 CC CC CC CC 76 00\n00 00 CC CC CC 78 30 00\n00 00 C6 D6 FE FE 6C 00\n00 00 C6 6C 38 6C C6 00\n00 00 CC CC CC 7C 0C F8\n00 00 FC 98 30 64 FC 00\n1C 30 30 E0 30 30 1C 00\n18 18 18 00 18 18 18 00\nE0 30 30 1C 30 30 E0 00\n76 DC 00 00 00 00 00 00";
+const FONT = new Array(256).fill(null);
+FONT_HEX.split('\n').forEach((l, n) => { FONT[32 + n] = l.trim().split(/\s+/).map(h => parseInt(h, 16)); });
+FONT[178] = [0xDB, 0x77, 0xDB, 0xEE, 0xDB, 0x77, 0xDB, 0xEE]; // ▓
+function charCode(ch) {
+  if (ch === '▓') return 178;
+  const c = ch.charCodeAt(0);
+  return (c >= 32 && c < 127) ? c : 63;
+}
+
+// ---------- display ----------
+const cv = document.getElementById('cv');
+const ctx = cv.getContext('2d');
+let mode = 'text';
+const PAL = [[0, 0, 0], [0x55, 0xFF, 0x55], [0xFF, 0x55, 0x55], [0xFF, 0xFF, 0x55]]; // CGAC0
+const gfx = new Uint8Array(320 * 200);
+let imgGfx = ctx.createImageData(320, 200);
+let imgTxt = ctx.createImageData(640, 200);
+
+// ---------- text mode (80x25, CGA 8x8 cells) ----------
+const TW = 80, TH = 25;
+const tbuf = new Uint8Array(TW * TH).fill(32);
+let tcx = 0, tcy = 0, showCursor = true;
+function tscroll() { tbuf.copyWithin(0, TW); tbuf.fill(32, TW * (TH - 1)); tcy = TH - 1; }
+function tputc(ch) {
+  if (ch === '\n') { tcx = 0; tcy++; }
+  else if (ch === '\t') { do { tputc(' '); } while (tcx % 8 !== 0); return; }
+  else { tbuf[tcy * TW + tcx] = charCode(ch); tcx++; if (tcx >= TW) { tcx = 0; tcy++; } }
+  if (tcy >= TH) tscroll();
+}
+function twrite(s) { for (const ch of s) tputc(ch); }
+function twriteln(s = '') { twrite(s); tputc('\n'); }
+function tcls() { tbuf.fill(32); tcx = 0; tcy = 0; }
+function tbackspace() { if (tcx > 0) { tcx--; tbuf[tcy * TW + tcx] = 32; } }
+
+function present(now) {
+  if (mode === 'gfx') {
+    if (cv.width !== 320) { cv.width = 320; }
+    const d = imgGfx.data;
+    for (let i = 0, p = 0; i < gfx.length; i++, p += 4) {
+      const c = PAL[gfx[i]]; d[p] = c[0]; d[p + 1] = c[1]; d[p + 2] = c[2]; d[p + 3] = 255;
+    }
+    ctx.putImageData(imgGfx, 0, 0);
+  } else {
+    if (cv.width !== 640) { cv.width = 640; }
+    const d = imgTxt.data;
+    d.fill(0);
+    const blink = Math.floor(now / 266) % 2 === 0;
+    for (let row = 0; row < TH; row++) for (let col = 0; col < TW; col++) {
+      const g = FONT[tbuf[row * TW + col]];
+      const cursorHere = showCursor && blink && row === tcy && col === tcx;
+      for (let y = 0; y < 8; y++) {
+        let bits = g ? g[y] : 0;
+        if (cursorHere && y >= 6) bits = 0xFF;
+        if (!bits) continue;
+        let p = ((row * 8 + y) * 640 + col * 8) * 4;
+        for (let x = 0; x < 8; x++, p += 4) if (bits & (0x80 >> x)) { d[p] = d[p + 1] = d[p + 2] = 0xAA; }
+      }
+    }
+    for (let p = 3; p < d.length; p += 4) d[p] = 255;
+    ctx.putImageData(imgTxt, 0, 0);
+  }
+}
+(function loop(t) { present(t || 0); requestAnimationFrame(loop); })();
+
+// ---------- BGI emulation ----------
+let curColor = 3, writeMode = 0, hjust = 0; // hjust: 0 left, 1 center
+const lefttext = 0, centertext = 1;
+function setcolor(c) { curColor = c; }
+function setwritemode(m) { writeMode = m; }
+function settextjustify(h) { hjust = h; }
+function cleardevice() { gfx.fill(0); }
+function putpixel(x, y, c) { if (x >= 0 && x < 320 && y >= 0 && y < 200) gfx[y * 320 + x] = c; }
+function linepix(x, y) {
+  if (x < 0 || x >= 320 || y < 0 || y >= 200) return;
+  const i = y * 320 + x;
+  if (writeMode === 1) gfx[i] ^= curColor; else gfx[i] = curColor;
+}
+function line(x1, y1, x2, y2) {
+  let dx = Math.abs(x2 - x1), dy = -Math.abs(y2 - y1);
+  const sx = x1 < x2 ? 1 : -1, sy = y1 < y2 ? 1 : -1;
+  let err = dx + dy;
+  for (;;) {
+    linepix(x1, y1);
+    if (x1 === x2 && y1 === y2) break;
+    const e2 = 2 * err;
+    if (e2 >= dy) { err += dy; x1 += sx; }
+    if (e2 <= dx) { err += dx; y1 += sy; }
+  }
+}
+function rectangle(x1, y1, x2, y2) { line(x1, y1, x2, y1); line(x2, y1, x2, y2); line(x2, y2, x1, y2); line(x1, y2, x1, y1); }
+function putimage(x, y, img, m) {
+  for (let iy = 0; iy < img.h; iy++) {
+    const yy = y + iy; if (yy < 0 || yy >= 200) continue;
+    for (let ix = 0; ix < img.w; ix++) {
+      const xx = x + ix; if (xx < 0 || xx >= 320) continue;
+      const v = img.d[iy * img.w + ix], k = yy * 320 + xx;
+      if (m === 1) gfx[k] ^= v; else gfx[k] = v;
+    }
+  }
+}
+function outtextxy(x, y, s) {
+  const x0 = hjust === centertext ? x - Math.trunc(s.length * 8 / 2) : x;
+  for (let n = 0; n < s.length; n++) {
+    const g = FONT[charCode(s[n])]; if (!g) continue;
+    for (let yy = 0; yy < 8; yy++) for (let xx = 0; xx < 8; xx++)
+      if (g[yy] & (0x80 >> xx)) putpixel(x0 + n * 8 + xx, y + yy, curColor);
+  }
+}
+
+// ---------- keyboard (BIOS-like buffer) ----------
+const keyBuf = [];
+let keyWaiter = null;
+function pushKey(k) {
+  if (keyBuf.length < 15) keyBuf.push(k);
+  if (keyWaiter) { const w = keyWaiter; keyWaiter = null; w(); }
+}
+function keypressed() { return keyBuf.length > 0; }
+function readkeyNow() { return keyBuf.shift(); }
+async function readkey() {
+  while (!keyBuf.length) await new Promise(r => { keyWaiter = r; });
+  return keyBuf.shift();
+}
+function flushKeys() { keyBuf.length = 0; }
+const kbd = document.getElementById('kbd');
+function keyToken(e) {
+  if (e.ctrlKey && !e.altKey && !e.metaKey && e.key && e.key.toLowerCase() === 's') return '\x13';
+  if (e.ctrlKey || e.metaKey || e.altKey) return null;
+  switch (e.key) {
+    case 'Enter': return '\r';
+    case 'Escape': return '\x1b';
+    case 'Backspace': return '\b';
+    case 'ArrowUp': return 'UP';
+    case 'ArrowDown': return 'DOWN';
+    case 'ArrowLeft': return 'LEFT';
+    case 'ArrowRight': return 'RIGHT';
+  }
+  if (e.key && e.key.length === 1) return e.key;
+  return null;
+}
+window.addEventListener('keydown', e => {
+  audioInit();
+  const t = keyToken(e);
+  if (t === null) return;
+  e.preventDefault();
+  pushKey(t);
+});
+kbd.addEventListener('input', () => { // on-screen keyboards that send no key codes
+  for (const ch of kbd.value) pushKey(ch);
+  kbd.value = '';
+});
+const screenEl = document.getElementById('screen');
+const focusEl = document.getElementById('focus');
+screenEl.addEventListener('pointerdown', () => { audioInit(); setTimeout(() => kbd.focus({ preventScroll: true }), 0); });
+function updateFocus() { focusEl.hidden = document.hasFocus(); }
+window.addEventListener('focus', updateFocus);
+window.addEventListener('blur', updateFocus);
+setTimeout(updateFocus, 300);
+
+// ---------- PC speaker ----------
+let ac = null, osc = null, gain = null;
+const VOL = 0.06;
+function audioInit() {
+  if (ac) { if (ac.state === 'suspended') ac.resume(); return; }
+  try {
+    ac = new (window.AudioContext || window.webkitAudioContext)();
+    osc = ac.createOscillator(); osc.type = 'square';
+    gain = ac.createGain(); gain.gain.value = 0;
+    osc.connect(gain).connect(ac.destination); osc.start();
+  } catch (e) { ac = null; }
+}
+function spk(f, ms, f2) {
+  if (!ac) return;
+  const t = ac.currentTime + 0.005;
+  osc.frequency.cancelScheduledValues(t); gain.gain.cancelScheduledValues(t);
+  osc.frequency.setValueAtTime(f, t);
+  if (f2) osc.frequency.linearRampToValueAtTime(f2, t + ms / 1000);
+  gain.gain.setValueAtTime(VOL, t);
+  gain.gain.setValueAtTime(0, t + ms / 1000);
+}
+function spkAt(f, startMs, ms) {
+  if (!ac) return;
+  const t = ac.currentTime + 0.005 + startMs / 1000;
+  osc.frequency.setValueAtTime(f, t);
+  gain.gain.setValueAtTime(VOL, t);
+  gain.gain.setValueAtTime(0, t + ms / 1000);
+}
+
+// ---------- timing ----------
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const nextFrame = () => new Promise(r => requestAnimationFrame(r));
+let nextT = 0, burst = 0;
+async function delay(ms) { await sleep(ms); nextT = performance.now(); }
+// replaces "delay(adelay)" + the self-calibrating adelay: one loop pass per needdelay ms
+async function tick(needdelay) {
+  const now = performance.now();
+  nextT += needdelay;
+  if (nextT < now - 100) nextT = now;
+  burst++;
+  if (nextT <= now && burst < 20) return;
+  burst = 0;
+  do { await nextFrame(); } while (performance.now() < nextT);
+}
+
+// ---------- storage (history.cro) ----------
+function loadHistory() {
+  try { const v = localStorage.getItem('crossfire.history.cro'); if (v !== null) return v; } catch (e) {}
+  return HISTORY_SEED;
+}
+let historyMem = loadHistory();
+function appendHistory(line) {
+  historyMem += line + '\n';
+  try { localStorage.setItem('crossfire.history.cro', historyMem); } catch (e) {}
+}
+
+// =====================================================================
+//                              cross.pas
+// =====================================================================
+const maxnmen = 3, maxendelay = 3, defaultneeddelay = 20, maxlives = 3, bonuslife = 3000,
+  maxfire = 35, maxbullets = 0;
+const pbullet = [0, -1, 0, 1, 4];
+const mindbullet = [0, 60, 25, 10, 5];
+const lb = 20, dh = 17, dv = 16, d1 = 15, d2 = 8, dd = 14;
+const bonix = [0, 3*d1+2*dh+1, 5*d1+4*dh+1, 5*d1+4*dh+1, 3*d1+2*dh+1];
+const boniy = [0, 4*d1+3*dv+1, 4*d1+3*dv+1, 3*d1+2*dv+1, 3*d1+2*dv+1];
+const bonox = [0, 3*d1+2*dh+1, 5*d1+4*dh+1, 5*d1+4*dh+1, 3*d1+2*dh+1];
+const bonoy = [0, 4*d1+4*dv, 4*d1+4*dv, 2*d1+2*dv, 2*d1+2*dv];
+const bonbo = [0, 100, 200, 400, 800];
+const bonst = ['', '100', '200', '400', '800'];
+const maxalone = 200;
+const escores = [0, 20, 30, 40, 50];
+const escoress = ['', '20', '30', '40', '50'];
+
+let IBO, ISH, IAM, IEM; const IX = [], IE = [];
+
+function arena() {
+  setcolor(1);
+  for (let i = 1; i <= 7; i++) for (let j = 1; j <= 6; j++)
+    rectangle(lb+i*d1+(i-1)*dh, j*d1+(j-1)*dv, lb+i*(d1+dh)-1, j*(d1+dv)-1);
+  setcolor(3);
+}
+
+function image(f, w, h) {
+  const lines = PATTERNS_CRO.split('\n');
+  let k = 0;
+  while (k < lines.length && lines[k] !== f) k++;
+  if (k >= lines.length) throw new Error(f + ' is missing from patterns.cro');
+  const c = parseInt(lines[k + 1], 10);
+  const d = new Uint8Array(w * h);
+  for (let i = 1; i <= 15; i++) {
+    let s = lines[k + 2 + i];
+    for (let j = 1; j <= 15; j++) {
+      s = s.substring(2);
+      const p = s.substring(0, 2);
+      if (p === '  ') {}
+      else if (p === '##') { if (j <= w && i <= h) d[(i - 1) * w + (j - 1)] = c; }
+      else throw new Error(f + ' corrupted in patterns.cro');
+    }
+  }
+  return { w, h, d };
+}
+function images() {
+  IBO = image('bonus', d1, d1 - 1);
+  ISH = image('ship', d1, d1);
+  IAM = image('ammo', d1, d1);
+  IX[1] = image('explosion1', d1, d1);
+  IX[2] = image('explosion2', d1, d1);
+  IEM = image('empty', d1, d1 - 1);
+  for (let n = 1; n <= 4; n++) IE[n] = image('enemy' + n, d1, d1);
+}
+
+const sgn = v => v > 0 ? 1 : (v === 0 ? 0 : -1);
+const random = n => Math.floor(Math.random() * n);
+const div = (a, b) => Math.trunc(a / b);
+const pad = (v, n) => { const s = String(v); return '0'.repeat(Math.max(0, n - s.length)) + s; };
+
+let i, j, r, dx, dy, ch;
+let spx, spy, isx, isy, svx, svy, ifx, ify, fvx, fvy, fpx, fpy;
+const A = () => new Array(64).fill(0);
+const el = A(), epx = A(), epy = A(), evx = A(), evy = A(), espx = A(), espy = A(),
+  es1x = A(), es1y = A(), es2x = A(), es2y = A(), est = A(), ewait = A(), dbullet = A();
+let died, bingo, jam, newammopos, isbonus;
+let ax = 0, ay = 0;
+let allfires, lastallfires, bonus, swallowdelay;
+let nen, nmen, edelay, endelay, bspeed;
+let lives, maxammo, ammo, level, ammosound, ammosounddir;
+let score, hiscore, lastscore, alone, nbul;
+const bpx = new Array(1001).fill(0), bpy = new Array(1001).fill(0), bvx = new Array(1001).fill(0), bvy = new Array(1001).fill(0);
+let nx, actxt;
+const xpx = A(), xpy = A(), xd = A(), xt = A();
+let needsound;
+
+function newexplosion(x, y) {
+  nx++; xpx[nx] = x; xpy[nx] = y; xd[nx] = 30; xt[nx] = actxt; actxt = 3 - actxt;
+}
+function clearexplosion() {
+  for (let i = 1; i <= nx - 1; i++) { xpx[i] = xpx[i+1]; xpy[i] = xpy[i+1]; xd[i] = xd[i+1]; xt[i] = xt[i+1]; }
+  nx--;
+}
+function showns() {
+  let s = 'B' + pad(nbul, 2);
+  for (let i = 0; i <= 1; i++) putimage(282+i*d1-d2, 128, IEM, 0);
+  outtextxy(282, 128, s);
+  s = 'E' + pad(nen, 2);
+  for (let i = 0; i <= 1; i++) putimage(282+i*d1-d2, 138, IEM, 0);
+  outtextxy(282, 138, s);
+}
+async function kill(p) {
+  if (el[p] > 0) {
+    if (needsound) {
+      spkAt(50, 0, 20); spkAt(50, 25, 20);
+      await delay(50);
+    }
+    putimage(lb+epx[p], epy[p], IEM, 0);
+    putimage(lb+spx, spy, ISH, 0);
+    if (est[p] === 2) newexplosion(epx[p], epy[p]);
+    else newexplosion(espx[p]+d1*es1x[p], espy[p]+d1*es1y[p]);
+  }
+  el[p]++;
+  nmen--;
+  est[p] = 0;
+  if (el[p] > 4) {
+    for (let i = p; i <= nen - 1; i++) {
+      epx[i] = epx[i+1]; epy[i] = epy[i+1]; evx[i] = evx[i+1]; evy[i] = evy[i+1];
+      espx[i] = espx[i+1]; espy[i] = espy[i+1]; es1x[i] = es1x[i+1]; es1y[i] = es1y[i+1];
+      es2x[i] = es2x[i+1]; es2y[i] = es2y[i+1]; el[i] = el[i+1]; est[i] = est[i+1];
+      ewait[i] = ewait[i+1]; dbullet[i] = dbullet[i+1];
+    }
+    nen--; showns();
+    if (nen <= level + 2) endelay = 1;
+  } else {
+    epx[p] = espx[p]; epy[p] = espy[p]; evx[p] = 0; evy[p] = 0; dbullet[p] = 0;
+    putimage(lb+epx[p], epy[p], IE[el[p]], 0);
+  }
+}
+function initship() {
+  spx = 4*(d1+dh); spy = 5*(d1+dv);
+  isx = 17; isy = 17; svx = 0; svy = 0;
+  putimage(lb+spx, spy, ISH, 0);
+}
+async function initenemies() {
+  let j = 1;
+  for (let i = 2; i <= 7; i++) {
+    espx[j] = i*d1+(i-1)*dh+1; espy[j] = 0; es1x[j] = -1; es1y[j] = 0; es2x[j] = 0; es2y[j] = 1; j++;
+  }
+  for (let i = 1; i <= 3; i++) {
+    espx[j] = 0; espy[j] = i*2*d1+(i*2-1)*dv; es1x[j] = 0; es1y[j] = -1; es2x[j] = 1; es2y[j] = 0; j++;
+  }
+  for (let i = 1; i <= 2; i++) {
+    espx[j] = 7*(d1+dh); espy[j] = (i*2+1)*d1+i*2*dv; es1x[j] = 0; es1y[j] = -1; es2x[j] = -1; es2y[j] = 0; j++;
+  }
+  nen = 11; nmen = 11; edelay = 0; endelay = maxendelay; bspeed = 1;
+  for (let i = 1; i <= 11; i++) { el[i] = 0; await kill(i); }
+}
+function standing() {
+  if (score >= lastscore + bonuslife) { lives++; lastscore = score; }
+  if (score > hiscore) hiscore = score;
+  outtextxy(282, 35, 'Score');
+  let s = pad(score, 6);
+  for (let i = 0; i <= 3; i++) putimage(244+i*d1, 46, IEM, 0);
+  outtextxy(282, 46, s);
+  outtextxy(282, 1, 'Hiscore');
+  s = pad(hiscore, 6);
+  for (let i = 0; i <= 3; i++) putimage(244+i*d1, 12, IEM, 0);
+  outtextxy(282, 12, s);
+  outtextxy(282, 97, 'Level');
+  s = pad(level, 2);
+  for (let i = 0; i <= 1; i++) putimage(282+i*d1-d2, 108, IEM, 0);
+  outtextxy(282, 108, s);
+  outtextxy(282, 159, 'Ships');
+  s = pad(lives, 2);
+  for (let i = 0; i <= 1; i++) putimage(282+i*d1-d2, 170, IEM, 0);
+  outtextxy(282, 170, s);
+  if (lives === 0) {
+    for (let i = 0; i <= 4; i++) putimage(100+i*d1, 93, IEM, 0);
+    outtextxy(139, 97, 'GAME OVER');
+  }
+}
+
+const ds = [null, [-1, 0], [0, -1], [1, 0], [0, 1], [0, 0]];
+const dkeys = [null, 'j', 'i', 'l', 'k', ' '];
+const P = (a, b) => (a + 1) * 3 + (b + 1);
+
+let autopilot, cheated, k, nde, d, actshot, isdd1, isdd2, name, needdelay;
+const dei = A(), ded = A();
+const pd = new Array(9).fill(false), dd1 = new Array(9).fill(false), dd2 = new Array(9).fill(false);
+
+function valWord(s) { return /^\s*\+?\d+$/.test(s) ? parseInt(s, 10) : null; }
+function valInt(s) { return /^\s*[+-]?\d+$/.test(s) ? parseInt(s, 10) : null; }
+
+async function cross(args) {
+  twriteln('CrossFire, Copyright (C) 1995, Peter Csurgay');
+  await delay(1000);
+  if (args.length === 0) { twriteln("Usage: cross 'name'"); return; }
+  const nd = valWord(args[args.length - 1]);
+  needdelay = nd === null ? defaultneeddelay : nd;
+  name = args[0];
+  hiscore = 0;
+  for (const raw of historyMem.split('\n')) {
+    if (!raw) continue;
+    let s = raw.substring(raw.indexOf('\t') + 1) + ' ';
+    if (s.substring(0, name.length) === name && s.indexOf('cheated') < 0) {
+      s = s.substring(name.length + 1);
+      s = s.substring(0, s.indexOf(' '));
+      const v = valInt(s); score = v === null ? 0 : v;
+      if (score > hiscore) hiscore = score;
+    }
+  }
+  autopilot = name === 'robot';
+
+  // initgraph(cga, cgac0)
+  mode = 'gfx'; showCursor = false; cleardevice(); setcolor(3); setwritemode(0);
+  settextjustify(centertext);
+  images();
+  cleardevice();
+  setcolor(1);
+  outtextxy(160, 1, 'CROSSFIRE');
+  outtextxy(160, 180, 'Copyright (C) 1995, Peter Csurgay');
+  outtextxy(160, 120, 'shoot:          move:');
+  outtextxy(160, 135, '  e               i  ');
+  outtextxy(160, 145, 's   f           j   l');
+  outtextxy(160, 150, '  d               k  ');
+  settextjustify(lefttext);
+  for (let i = 1; i <= 4; i++) {
+    putimage(30, 8+i*20, IE[i], 0);
+    outtextxy(55, 12+i*20, '- ' + escoress[i] + ' points');
+  }
+  putimage(180, 8+1*20, IBO, 0); outtextxy(205, 12+1*20, '- bonus');
+  putimage(180, 8+2*20, IAM, 0); outtextxy(205, 12+2*20, '- ammo');
+  outtextxy(177, 12+3*20, 'SPC'); outtextxy(205, 12+3*20, '- stop moving');
+  outtextxy(177, 12+4*20, 'ENT'); outtextxy(205, 12+4*20, '- robot mode');
+  settextjustify(centertext);
+  spx = 0; spy = 12; svx = 1;
+  while (!keypressed() && !autopilot) {
+    putimage(spx, spy, ISH, 1);
+    for (let i = 1; i <= 2; i++) {
+      putimage(180, 8+1*20, IBO, 1);
+      await delay(40);
+      putimage(180, 8+2*20, IAM, 1);
+    }
+    putimage(spx, spy, ISH, 1);
+    spx += svx; if (spx >= 320 - d1 || spx < 0) svx = -svx;
+  }
+  setcolor(3);
+  flushKeys();
+
+  lives = maxlives; score = 0; lastscore = 0; level = 1;
+  actxt = 1; cheated = false; needsound = true;
+  nextT = performance.now();
+
+  do {
+    cleardevice();
+    for (let i = 1; i <= 4; i++) putimage(lb+bonix[i], boniy[i], IBO, 0);
+    initship();
+    alone = maxalone;
+    maxammo = maxfire - (level - 1) * 3; if (maxammo < 15) maxammo = 15;
+    ammo = maxammo; newammopos = true;
+    bonus = 0; isbonus = false; allfires = 0; lastallfires = 0; swallowdelay = 0;
+    await initenemies();
+    nx = 0;
+    nde = 0; actshot = false;
+    arena();
+    standing();
+    nbul = 0; showns();
+
+    died = false;
+    ifx = 17; ify = 17; fvx = 0; fvy = 0;
+    ch = '|';
+    do {
+      await tick(needdelay);
+      edelay++; if (edelay > endelay) edelay = 0;
+      if (keypressed()) {
+        ch = readkeyNow();
+        if (ch === 'UP') ch = 'i'; else if (ch === 'DOWN') ch = 'k';
+        else if (ch === 'LEFT') ch = 'j'; else if (ch === 'RIGHT') ch = 'l';
+        else if (ch.length === 1 && ch >= 'A' && ch <= 'Z') ch = ch.toLowerCase();
+      }
+
+      // AUTOPILOT
+      if (autopilot) {
+        pd.fill(false); dd1.fill(false); dd2.fill(false);
+        pd[P(-1,0)] = true; pd[P(0,-1)] = true; pd[P(1,0)] = true; pd[P(0,1)] = true; pd[P(0,0)] = true;
+        if (spx === dh+d1) pd[P(-1,0)] = false;
+        if (spy === dv+d1) pd[P(0,-1)] = false;
+        if (spx === 6*(dh+d1)) pd[P(1,0)] = false;
+        if (spy === 5*(dv+d1)) pd[P(0,1)] = false;
+        if (spx % (dh+d1) !== 0) { pd[P(0,-1)] = false; pd[P(0,1)] = false; }
+        if (spy % (dv+d1) !== 0) { pd[P(-1,0)] = false; pd[P(1,0)] = false; }
+
+        // AUTOPILOT: DANGEROUS ENEMIES
+        nde = 0;
+        for (i = 1; i <= nen; i++) {
+          dx = spx - epx[i];
+          dy = spy - epy[i];
+          if (dx < d1) d = dy; else d = dx;
+          if (est[i] > 0 && (Math.abs(dx) < 2*d1 || Math.abs(dy) < 2*d1)) {
+            nde++;
+            j = 1; while (d > ded[j] && j < nde) j++;
+            for (k = nde; k >= j + 1; k--) { ded[k] = ded[k-1]; dei[k] = dei[k-1]; }
+            ded[j] = d; dei[j] = i;
+          }
+        }
+
+        // AUTOPILOT: COULD GO FOR BONUS
+        if (ammo > 10 && isbonus && spx % (dh+d1) === 0 && spy % (dv+d1) === 0) {
+          dx = bonox[bonus] - spx;
+          dy = bonoy[bonus] - spy;
+          if (Math.abs(dx) < dh-1 && dy !== 0) {
+            if (dx !== 0) dd1[P(-sgn(dx),0)] = true;
+            if (dx !== 0) dd2[P(sgn(dx),0)] = true;
+          } else if (Math.abs(dx) === dh-1 && dy !== 0) {
+            if (dy !== 0) dd1[P(0,sgn(dy))] = true;
+            if (dx !== 0) dd2[P(sgn(dx),0)] = true;
+          } else {
+            if (dx !== 0) dd1[P(sgn(dx),0)] = true;
+            if (dy !== 0) dd1[P(0,sgn(dy))] = true;
+            dd2[P(0,-1)] = true; dd2[P(0,1)] = true;
+          }
+        }
+        // AUTOPILOT: CLOSEST TO SHOOT
+        if (!actshot) {
+          if (nde > 0) {
+            dx = spx - spx % (d1+dh) + div(svx*svx*(svx+1), 2)*(d1+dh) - epx[dei[1]];
+            dy = spy - spy % (d1+dv) + div(svy*svy*(svy+1), 2)*(d1+dv) - epy[dei[1]];
+            dx = dx - div(Math.abs(dx), 7*(endelay+1)) * evx[dei[1]];
+            dy = dy - div(Math.abs(dy), 7*(endelay+1)) * evy[dei[1]];
+            if (Math.abs(dx) < d2) ch = dy < 0 ? 'd' : 'e';
+            if (Math.abs(dy) < d2) ch = dx < 0 ? 'f' : 's';
+            if (ch === 'd' || ch === 'e' || ch === 'f' || ch === 's') {
+              actshot = true;
+              nde--;
+              for (k = 1; k <= nde; k++) { ded[k] = ded[k+1]; dei[k] = dei[k+1]; }
+            }
+          }
+          if (nen === 1 && (bonus < 4 || (bonus === 4 && isbonus))) {
+            if (isbonus) {
+              ch = '|';
+              actshot = false;
+            } else {
+              let s;
+              switch (ch) { case 's': s = 'edf'; break; case 'e': s = 'sdf'; break; case 'd': s = 'sef'; break; case 'f': s = 'sed'; break; default: s = 'sedf'; }
+              ch = s[random(s.length)];
+              actshot = true;
+            }
+          }
+        }
+        // AUTOPILOT: SHOULD GO FOR AMMO
+        if (ammo <= 10) {
+          dx = ax - spx;
+          dy = ay - spy;
+          if (Math.abs(dy) >= dv+d1 && div(spx, dh+d1) === div(ax, d1+dh) && !pd[P(0,sgn(dy))]) {
+            if (spx % (dh+d1) + ax % (dh+d1) - dd > dh) { dd1[P(1,0)] = true; dd2[P(-1,0)] = true; }
+            else { dd1[P(-1,0)] = true; dd2[P(1,0)] = true; }
+          } else if (Math.abs(dx) >= dh+d1 && div(spy, dv+d1) === div(ay, d1+dv) && !pd[P(sgn(dx),0)]) {
+            if (spy % (dv+d1) + ay % (d1+dv) - dd > dv) { dd1[P(0,1)] = true; dd2[P(0,-1)] = true; }
+            else { dd1[P(0,-1)] = true; dd2[P(0,1)] = true; }
+          } else {
+            if (dx !== 0) dd1[P(sgn(dx),0)] = true;
+            if (dy !== 0) dd1[P(0,sgn(dy))] = true;
+          }
+        }
+        // AUTOPILOT: MUST AVOID COLLISION
+        for (i = 1; i <= nen; i++) {
+          dx = spx + 3*svx - epx[i] - evx[i]*3;
+          dy = spy + 3*svy - epy[i] - evy[i]*3;
+          if (Math.abs(dx) < 2*d1 && Math.abs(dy) < 2*d1) {
+            pd[P(-sgn(dx),0)] = false; pd[P(0,-sgn(dy))] = false; pd[P(0,0)] = false;
+          }
+        }
+        // AUTOPILOT: MUST AVOID BULLETS
+        for (i = 1; i <= nbul; i++) {
+          dx = spx + svx + d2 - bpx[i] - bspeed*bvx[i]*d1;
+          dy = spy + svy + d2 - bpy[i] - bspeed*bvy[i]*d1;
+          if (Math.abs(dx) < 2*d1 && Math.abs(dy) < 2*d1) {
+            pd[P(-sgn(dx),0)] = false; pd[P(0,-sgn(dy))] = false;
+          }
+        }
+        // AUTOPILOT: WHERE TO GO THEN?
+        for (let q = 0; q < 9; q++) { dd1[q] = dd1[q] && pd[q]; dd2[q] = dd2[q] && pd[q]; }
+        isdd1 = false; for (i = 1; i <= 5; i++) isdd1 = isdd1 || dd1[P(ds[i][0], ds[i][1])];
+        isdd2 = false; for (i = 1; i <= 5; i++) isdd2 = isdd2 || dd2[P(ds[i][0], ds[i][1])];
+        if (ch === '|') {
+          if (isdd1) {
+            r = random(5) + 1;
+            for (i = 1; i <= 5; i++) { if (dd1[P(ds[r][0], ds[r][1])]) ch = dkeys[r]; r++; if (r > 5) r = 1; }
+          } else if (isdd2) {
+            r = random(5) + 1;
+            for (i = 1; i <= 5; i++) { if (dd2[P(ds[r][0], ds[r][1])]) ch = dkeys[r]; r++; if (r > 5) r = 1; }
+          } else if (pd[P(0,0)] && random(100) === 0) {
+            ch = ' ';
+          } else if (pd[P(svx,svy)] && random(100) !== 0) {
+          } else {
+            r = random(5) + 1;
+            for (i = 1; i <= 5; i++) { if (pd[P(ds[r][0], ds[r][1])]) ch = dkeys[r]; r++; if (r > 5) r = 1; }
+          }
+        }
+        if ((ch === 'j' && svx === 1) || (ch === 'l' && svx === -1) || (ch === 'i' && svy === 1) || (ch === 'k' && svy === -1))
+          actshot = false;
+      }
+
+      if (ch === 'i') { isy = -1; isx = 0; }
+      else if (ch === 'k') { isy = 1; isx = 0; }
+      else if (ch === 'j') { isx = -1; isy = 0; }
+      else if (ch === 'l') { isx = 1; isy = 0; }
+      else if (ch === ' ') { isx = 0; isy = 0; }
+      else if (ch === 'e') { ify = -1; ifx = 0; }
+      else if (ch === 'd') { ify = 1; ifx = 0; }
+      else if (ch === 's') { ifx = -1; ify = 0; }
+      else if (ch === 'f') { ifx = 1; ify = 0; }
+      else if (ch === '\r') { autopilot = !autopilot; cheated = true; }
+      else if (ch === '0') { needdelay = 0; }
+      else if (ch === '1') { needdelay = 5; }
+      else if (ch === '2') { needdelay = 10; }
+      else if (ch === '3') { needdelay = 20; }
+      else if (ch === '4') { needdelay = 40; cheated = true; }
+      else if (ch === '5') { needdelay = 80; cheated = true; }
+      else if (ch === '6') { needdelay = 160; cheated = true; }
+      else if (ch === '7') { needdelay = 320; cheated = true; }
+      else if (ch === '8') { needdelay = 640; cheated = true; }
+      else if (ch === '9') { needdelay = 3000; cheated = true; }
+      else if (ch === '*') { needdelay = defaultneeddelay; }
+      else if (ch === '+') { if (needdelay > 0) needdelay--; }
+      else if (ch === '-') { if (needdelay < 10000) needdelay++; cheated = true; }
+      else if (ch === '\x13') { needsound = !needsound; }
+      if (ch === '\x1b') autopilot = false; else ch = '|';
+
+      // AMMO
+      r = random(2);
+      if (ammo <= 10 && newammopos) {
+        newammopos = false; ammosound = 5000; ammosounddir = 1;
+        if (r === 0) { ax = (random(6)+1)*(dh+d1); ay = random(4*(dv+d1)) + dv + d1; }
+        else { ax = random(5*(dh+d1)) + dh + d1; ay = (random(5)+1)*(dv+d1); }
+      }
+      if (ammo <= 10) {
+        putimage(lb+ax, ay, IAM, 1);
+        if (ammosound % 200 === 0) { if (needsound) spk(ammosound, 5); }
+        ammosound += ammosounddir * 20;
+        if (ammosound <= 5000) ammosounddir = 1;
+        if (ammosound >= 6000) ammosounddir = -1;
+      }
+
+      // BONUS
+      if (isbonus) putimage(lb+bonox[bonus], bonoy[bonus], IBO, 1);
+      if (swallowdelay > 0) {
+        setwritemode(1);
+        putimage(lb+bonox[bonus]-d2, bonoy[bonus], IEM, 0);
+        putimage(lb+bonox[bonus]+d2-1, bonoy[bonus], IEM, 0);
+        outtextxy(lb+bonox[bonus]+d2, bonoy[bonus]+2, bonst[bonus]);
+        putimage(lb+spx, spy, ISH, 0);
+        setwritemode(0);
+        swallowdelay--;
+        if (swallowdelay === 0) {
+          putimage(lb+bonox[bonus]-d2, bonoy[bonus], IEM, 0);
+          putimage(lb+bonox[bonus]+d2-1, bonoy[bonus], IEM, 0);
+          putimage(lb+spx, spy, ISH, 0);
+        }
+      }
+
+      // EXPLOSIONS (Pascal for: upper bound evaluated once)
+      for (let i = 1, hi = nx; i <= hi; i++) {
+        putimage(lb+xpx[i], xpy[i], IX[xt[i]], 1);
+        xd[i]--;
+        if (xd[i] === 0) {
+          putimage(lb+xpx[i], xpy[i], IEM, 0);
+          putimage(lb+spx, spy, ISH, 0);
+          clearexplosion();
+        }
+      }
+
+      // SHIP: NEW VELOCITY VECTOR
+      if (isx + isy < 2) {
+        if ((isy !== 0 && spx % (d1+dh) === 0) || (isx !== 0 && spy % (d1+dv) === 0) ||
+            (spx % (d1+dh) === 0 && spy % (d1+dv) === 0)) {
+          svx = isx; svy = isy; isx = 17; isy = 17;
+        }
+      }
+
+      // SHIP: MOVES
+      if (svx + svy !== 0) {
+        if (spx + svx < d1+dh || spx + svx > 6*(d1+dh)) svx = 0;
+        else if (spy + svy < d1+dv || spy + svy > 5*(d1+dv)) svy = 0;
+        else {
+          spx += svx; spy += svy; putimage(lb+spx, spy, ISH, 0);
+          if (ammo <= 10 && Math.abs(spx-ax) < d1 && Math.abs(spy-ay) < d1) {
+            putimage(lb+ax, ay, IEM, 0);
+            putimage(lb+spx, spy, ISH, 0);
+            ammo = maxammo; newammopos = true;
+            if (needsound) spk(1500, 12, 2500);
+          }
+          if (isbonus && Math.abs(spx-bonox[bonus]) < d1 && Math.abs(spy-bonoy[bonus]) < d1) {
+            score += bonbo[bonus];
+            swallowdelay = 50;
+            lastallfires = allfires;
+            isbonus = false;
+            if (needsound) spk(1500, 12, 2500);
+            standing();
+          }
+        }
+      }
+
+      // SHIP: TRY TO FIRE
+      if (ifx + ify < 2 && ammo > 0) {
+        if (((ifx === 0 && spx % (d1+dh) === 0) || (ify === 0 && spy % (d1+dv) === 0)) && fvx + fvy === 0) {
+          fvx = ifx; fvy = ify; ifx = 17; ify = 17;
+          fpx = spx + d2 + fvx*d2; fpy = spy + d2 + fvy*d2;
+          ammo--; allfires++;
+          if (allfires === lastallfires + 12) {
+            isbonus = !isbonus;
+            if (isbonus) bonus++;
+            if (bonus > 4) isbonus = false;
+            lastallfires = allfires;
+            if (isbonus) {
+              putimage(lb+bonix[bonus], boniy[bonus], IEM, 0);
+              if (needsound) spk(3000, 12, 4000);
+            } else if (bonus < 5) {
+              putimage(lb+bonox[bonus], bonoy[bonus], IEM, 0);
+              putimage(lb+spx, spy, ISH, 0);
+              putimage(lb+bonix[bonus], boniy[bonus], IBO, 0);
+            }
+          }
+        }
+      }
+
+      // SHIP: FIRE MOVES
+      if (fvx + fvy !== 0) {
+        i = 1; bingo = false;
+        do {
+          if (nen > 0 && Math.abs(epx[i]+d2-fpx) <= d2 && Math.abs(epy[i]+d2-fpy) < d2) {
+            score += escores[el[i]]; standing(); await kill(i); bingo = true;
+          }
+          i++;
+        } while (!(i > nen || bingo));
+        if (bingo || fpx < d1 || fpx >= 7*(d1+dh) || fpy < d1 || fpy > 5*(d1+dv)+d1) {
+          setcolor(0); line(lb+fpx, fpy, lb+fpx+14*fvx, fpy+14*fvy); setcolor(3);
+          fvx = 0; fvy = 0; actshot = false;
+        } else {
+          line(lb+fpx+7*fvx, fpy+7*fvy, lb+fpx+14*fvx, fpy+14*fvy);
+          setcolor(0); line(lb+fpx, fpy, lb+fpx+6*fvx, fpy+6*fvy); setcolor(3);
+        }
+        fpx += 7*fvx; fpy += 7*fvy;
+      }
+
+      // BULLETS (Pascal for: upper bound evaluated once)
+      for (let i = 1, hi = nbul; i <= hi; i++) {
+        if (Math.abs(spx+d2-bpx[i]) < d2 && Math.abs(spy+d2-bpy[i]) < d2) died = true;
+        if (bpx[i] < d1 || bpx[i] > 7*(d1+dh) || bpy[i] < d1 || bpy[i] > 5*(d1+dv)) {
+          setcolor(0);
+          line(lb+bpx[i]-bvx[i], bpy[i]-bvy[i], lb+bpx[i]+(2+3*bspeed)*bvx[i], bpy[i]+(2+3*bspeed)*bvy[i]);
+          setcolor(3);
+          for (let j = i; j <= nbul - 1; j++) { bpx[j] = bpx[j+1]; bpy[j] = bpy[j+1]; bvx[j] = bvx[j+1]; bvy[j] = bvy[j+1]; }
+          nbul--; showns();
+        } else {
+          line(lb+bpx[i]+bvx[i], bpy[i]+bvy[i], lb+bpx[i]+(2+3*bspeed)*bvx[i], bpy[i]+(2+3*bspeed)*bvy[i]);
+          setcolor(0);
+          line(lb+bpx[i]-bvx[i], bpy[i]-bvy[i], lb+bpx[i]+bspeed*bvx[i], bpy[i]+bspeed*bvy[i]);
+          setcolor(3);
+        }
+        bpx[i] += bspeed*bvx[i]; bpy[i] += bspeed*bvy[i];
+      }
+
+      // ENEMIES
+      if (nen > 0) {
+        // ENEMIES: START MOVING
+        i = random(nen) + 1;
+        if (evx[i] + evy[i] === 0 && (nmen < maxnmen + 1*level || est[i] > 0)) {
+          if (est[i] === 0) {
+            nmen++; evx[i] = es1x[i]; evy[i] = es1y[i]; est[i] = 1;
+          } else {
+            ewait[i]--;
+            r = random(4);
+            if (ewait[i] === 0 || nen <= maxnmen + 1*level) {
+              if (r > 0 || nen <= maxnmen + 1*level) { evx[i] = es2x[i]; evy[i] = es2y[i]; est[i] = 2; }
+              else { evx[i] = -es1x[i]; evy[i] = -es1y[i]; }
+            }
+          }
+        }
+
+        // ENEMIES: MOVE
+        if (edelay === 0) for (i = 1; i <= nen; i++) {
+          // DELAY OF NEXT BULLET
+          if (dbullet[i] === 0) r = random(100); else { r = 101; dbullet[i]--; }
+
+          // MOVE, JAM?
+          if (est[i] > 0) {
+            epx[i] += evx[i]; epy[i] += evy[i];
+            jam = false;
+            for (j = 1; j <= nen; j++) {
+              if (j !== i && Math.abs(epx[i]-epx[j]) < d1 && Math.abs(epy[i]-epy[j]) < d1) {
+                jam = true;
+                epx[i] -= evx[i]; epy[i] -= evy[i];
+                if (epx[i] >= dh+d1 && epx[i] <= 7*(dh+d1)-dv && epy[i] >= dv+d1 && epy[i] <= 6*(dv+d1)-dv) {
+                  evx[i] = -evx[i]; evy[i] = -evy[i];
+                }
+              }
+            }
+            putimage(lb+epx[i], epy[i], IE[el[i]], 0);
+
+            dx = sgn(spx-epx[i]); dy = sgn(spy-epy[i]);
+
+            if ((epx[i] % (d1+dh) === 0 || epy[i] % (d1+dv) === 0) && nbul < maxbullets + 2*level && est[i] === 2) {
+              if (r < pbullet[el[i]] + 0*level) {
+                dbullet[i] = mindbullet[el[i]] - 0*level;
+                nbul++; showns();
+                if (epx[i] % (d1+dh) !== 0) dy = 0;
+                if (epy[i] % (d1+dv) !== 0) dx = 0;
+                if (dx !== 0 && dy !== 0) { r = random(2); if (r === 0) dx = 0; else dy = 0; }
+                bvx[nbul] = dx; bvy[nbul] = dy;
+                bpx[nbul] = epx[i] + d2 + dx*d2; bpy[nbul] = epy[i] + d2 + dy*d2;
+              }
+            }
+
+            if (!jam) {
+              // IF JUST ARRIVED BACK TO ITS STARTING POSITION
+              if (epx[i] === espx[i] && epy[i] === espy[i]) { nmen--; est[i] = 0; evx[i] = 0; evy[i] = 0; }
+              if (Math.abs(spx-epx[i]) < dd && Math.abs(spy-epy[i]) < dd) died = true;
+              if (epx[i] % (d1+dh) === 0 && epy[i] % (d1+dv) === 0) {
+                if (est[i] === 1) { evx[i] = 0; evy[i] = 0; ewait[i] = random(5); }
+                else {
+                  evx[i] = sgn(spx-epx[i]);
+                  evy[i] = sgn(spy-epy[i]);
+                  if (evx[i] !== 0 && evy[i] !== 0) { r = random(2); if (r === 0) evx[i] = 0; else evy[i] = 0; }
+                }
+              }
+            }
+          }
+        }
+      }
+
+      if (nen === 0) alone--;
+
+      // DIED
+      if (died) {
+        for (let i = 1; i <= 5; i++) {
+          putimage(lb+spx, spy, IX[actxt], 0);
+          actxt = 3 - actxt;
+          await delay(300);
+        }
+        await delay(500);
+        lives--; standing();
+        if (lives > 0) {
+          died = false;
+          nmen = 0;
+          ammo = maxammo; newammopos = true;
+          for (let i = 1; i <= nen; i++) {
+            putimage(lb+epx[i], epy[i], IEM, 0);
+            epx[i] = espx[i]; epy[i] = espy[i]; est[i] = 0; evx[i] = 0; evy[i] = 0;
+          }
+          putimage(lb+spx, spy, IEM, 0);
+          putimage(lb+ax, ay, IEM, 0);
+          setcolor(0);
+          for (let i = 1; i <= nbul; i++) line(lb+bpx[i], bpy[i], lb+bpx[i]+5*bvx[i], bpy[i]+5*bvy[i]);
+          setcolor(3);
+          nbul = 0; showns();
+          for (let i = 1; i <= nen; i++) putimage(lb+epx[i], epy[i], IE[el[i]], 0);
+          initship();
+          nde = 0; actshot = false;
+        }
+      }
+    } while (!(ch === '\x1b' || died || (nen === 0 && alone === 0)));
+    if (nen === 0) level++;
+    standing();
+    if (died || nen === 0) await delay(2000);
+  } while (!(ch === '\x1b' || died));
+
+  const now = new Date();
+  appendHistory((now.getMonth()+1) + '.' + now.getDate() + '. ' + now.getHours() + ':' + now.getMinutes() +
+    '\t' + name + ':' + score + (cheated ? ' (cheated)' : '') + (died ? '' : ' (aborted)'));
+  flushKeys();
+  if (died && !autopilot) await readkey();
+  flushKeys();
+  // closegraph
+  mode = 'text'; showCursor = true; tcls();
+}
+
+// =====================================================================
+//                     a tiny DOS prompt around it
+// =====================================================================
+const FILES = [
+  ['CROSS', 'EXE', 31422], ['CGA', 'BGI', 6253], ['PATTERNS', 'CRO', 6250],
+  ['HISTORY', 'CRO', null], ['README', 'TXT', 738]
+];
+async function readLine(hist) {
+  let s = '', hp = hist.length;
+  for (;;) {
+    const k = await readkey();
+    if (k === '\r') { twriteln(); return s; }
+    if (k === '\b') { if (s.length) { s = s.slice(0, -1); tbackspace(); } continue; }
+    if (k === '\x1b') { while (s.length) { s = s.slice(0, -1); tbackspace(); } continue; }
+    if (k === 'UP' || k === 'DOWN') {
+      if (!hist.length) continue;
+      hp = k === 'UP' ? Math.max(0, hp - 1) : Math.min(hist.length, hp + 1);
+      while (s.length) { s = s.slice(0, -1); tbackspace(); }
+      s = hp < hist.length ? hist[hp] : ''; twrite(s);
+      continue;
+    }
+    if (k.length === 1 && k >= ' ' && k <= '~' && s.length < 60) { s += k; twrite(k); }
+  }
+}
+function typeFile(text) { for (const l of text.replace(/\n$/, '').split('\n')) twriteln(l); }
+async function run(cmdline) {
+  const parts = cmdline.trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return;
+  const cmd = parts[0].toLowerCase(), args = parts.slice(1);
+  if (cmd === 'cross' || cmd === 'cross.exe') { await cross(args); return; }
+  if (cmd === 'cls') { tcls(); return; }
+  if (cmd === 'ver') { twriteln(); twriteln('MS-DOS Version 6.22'); twriteln(); return; }
+  if (cmd === 'dir') {
+    twriteln(); twriteln(' Volume in drive C is CROSSFIRE'); twriteln(' Directory of C:\\CROSS'); twriteln();
+    twriteln('.            <DIR>        03-31-95  12:00a');
+    twriteln('..           <DIR>        03-31-95  12:00a');
+    for (const [n, e, sz] of FILES) {
+      const size = sz === null ? historyMem.replace(/\n/g, '\r\n').length : sz;
+      twriteln(n.padEnd(9) + e.padEnd(4) + String(size).padStart(10) + ' 03-31-95  12:00a');
+    }
+    twriteln('        5 file(s)'); twriteln();
+    return;
+  }
+  if (cmd === 'type') {
+    const f = (args[0] || '').toLowerCase();
+    if (f === 'history.cro') typeFile(historyMem);
+    else if (f === 'readme.txt') typeFile(README_TXT);
+    else if (f === 'patterns.cro') typeFile(PATTERNS_CRO.replace(/##/g, '▓▓'));
+    else if (!f) twriteln('Required parameter missing');
+    else twriteln('File not found - ' + args[0].toUpperCase());
+    return;
+  }
+  if (cmd === 'help') {
+    twriteln('cross <name> [delay]   play  (cross robot = autopilot, delay 20 = normal)');
+    twriteln('type history.cro       all past games');
+    twriteln('type readme.txt        the 1995 readme');
+    twriteln('dir, cls, ver');
+    return;
+  }
+  twriteln('Bad command or file name');
+}
+async function shell() {
+  twriteln('Crossfire (C) 1995 Peter Csurgay  -  Turbo Pascal to HTML5 canvas port');
+  twriteln();
+  twriteln('  cross <name>         play, e.g.  cross peti');
+  twriteln('  cross robot          watch the robot play');
+  twriteln('  type history.cro     earlier games          help   more commands');
+  twriteln();
+  const hist = [];
+  for (;;) {
+    twrite('C:\\CROSS>');
+    const line = await readLine(hist);
+    if (line.trim()) hist.push(line);
+    try { await run(line); }
+    catch (e) { mode = 'text'; showCursor = true; twriteln('Runtime error: ' + e.message); }
+  }
+}
+shell();
+</script>
+</body>
+</html>
